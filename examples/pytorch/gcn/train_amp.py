@@ -48,7 +48,7 @@ def train(g, features, labels, masks, model):
     for epoch in range(200):
         model.train()
         nvtx.range_push("Epoch" + str(epoch))
-        with autocast():
+        with AMP.autocast():
             nvtx.range_push("Forward pass")
             logits = model(g, features)
             nvtx.range_pop()
