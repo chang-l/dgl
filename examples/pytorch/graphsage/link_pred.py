@@ -169,7 +169,10 @@ for epoch in range(10):
         nvtx.range_push("Backward pass")
         loss.backward()
         nvtx.range_pop()
+
+        nvtx.range_push("opt.step")
         opt.step()
+        nvtx.range_pop()
         if (it + 1) % 20 == 0:
             mem = torch.cuda.max_memory_allocated() / 1000000
             print('Loss', loss.item(), 'GPU Mem', mem, 'MB')
