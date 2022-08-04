@@ -10,6 +10,7 @@ from ogb.nodeproppred import DglNodePropPredDataset
 import tqdm
 import argparse
 import torch.cuda.nvtx as nvtx
+import torch.cuda.amp as AMP
 
 class SAGE(nn.Module):
     def __init__(self, in_size, hid_size, out_size):
@@ -97,6 +98,7 @@ def train(args, device, g, dataset, model):
                                 use_uva=use_uva)
 
     opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-4)
+    scaler = AMP.GradScaler()
     
     for epoch in range(10):
         nvtx.range_push("Epoch" + str(epoch))
@@ -107,19 +109,23 @@ def train(args, device, g, dataset, model):
             x = blocks[0].srcdata['feat']
             y = blocks[-1].dstdata['label']
             nvtx.range_pop()
-            nvtx.range_push("Forward pass")
-            y_hat = model(blocks, x)
-            nvtx.range_pop()
-            nvtx.range_push("Loss calculation")
-            loss = F.cross_entropy(y_hat, y)
-            nvtx.range_pop()
-            opt.zero_grad()
+            with AMP.autocast():
+                nvtx.range_push("Forward pass")
+                y_hat = model(blocks, x)
+                nvtx.range_pop()
+                nvtx.range_push("Loss calculation")
+                loss = F.cross_entropy(y_hat, y)
+                nvtx.range_pop()
             nvtx.range_push("Backward pass")
-            loss.backward()
+            scaler.scale(loss).backward()
             nvtx.range_pop()
             nvtx.range_push("opt.step")
-            opt.step()
+            scaler.step(opt)
             nvtx.range_pop()
+            nvtx.range_push("amp update")
+            scaler.update()
+            nvtx.range_pop()
+            opt.zero_grad()
             total_loss += loss.item()
         acc = evaluate(model, g, val_dataloader)
         nvtx.range_pop()
