@@ -6,6 +6,7 @@ import dgl.nn as dglnn
 from dgl.data import CoraGraphDataset, CiteseerGraphDataset, PubmedGraphDataset
 from dgl import AddSelfLoop
 import argparse
+import torch.cuda.amp as AMP
 import torch.cuda.nvtx as nvtx
 
 class GCN(nn.Module):
@@ -42,22 +43,26 @@ def train(g, features, labels, masks, model):
     val_mask = masks[1]
     loss_fcn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2, weight_decay=5e-4)
-
+    scaler = AMP.GradScaler()
     # training loop
     for epoch in range(200):
         model.train()
         nvtx.range_push("Epoch" + str(epoch))
-        nvtx.range_push("Forward pass")
-        logits = model(g, features)
-        nvtx.range_pop()
-        nvtx.range_push("Loss calculation")
-        loss = loss_fcn(logits[train_mask], labels[train_mask])
-        nvtx.range_pop()
-        optimizer.zero_grad()
+        with autocast():
+            nvtx.range_push("Forward pass")
+            logits = model(g, features)
+            nvtx.range_pop()
+            nvtx.range_push("Loss calculation")
+            loss = loss_fcn(logits[train_mask], labels[train_mask])
+            nvtx.range_pop()
         nvtx.range_push("Backward pass")            
-        loss.backward()
+        scaler.scale(loss).backward()
         nvtx.range_pop()
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
+        # loss.backward()
+        # optimizer.step()
         acc = evaluate(g, features, labels, val_mask, model)
         print("Epoch {:05d} | Loss {:.4f} | Accuracy {:.4f} "
               . format(epoch, loss.item(), acc))

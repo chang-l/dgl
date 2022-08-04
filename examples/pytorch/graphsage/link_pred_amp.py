@@ -12,6 +12,7 @@ import tqdm
 # (This is a long-standing issue)
 from ogb.linkproppred import DglLinkPropPredDataset
 import torch.cuda.amp as AMP
+import torch.cuda.nvtx as nvtx
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--pure-gpu', action='store_true',
@@ -146,21 +147,31 @@ dataloader = dgl.dataloading.DataLoader(
         device=device, batch_size=512, shuffle=True,
         drop_last=False, num_workers=0, use_uva=not args.pure_gpu)
 
+torch.cuda.cudart().cudaProfilerStart()
 durations = []
 for epoch in range(10):
     model.train()
+    nvtx.range_push("Epoch" + str(epoch))
     t0 = time.time()
     for it, (input_nodes, pair_graph, neg_pair_graph, blocks) in enumerate(dataloader):
+        nvtx.range_push("Copy to device")
         x = blocks[0].srcdata['feat']
+        nvtx.range_pop()
+        nvtx.range_push("Forward pass")
         with AMP.autocast():
             pos_score, neg_score = model(pair_graph, neg_pair_graph, blocks, x)
+            nvtx.range_pop()
+            nvtx.range_push("Loss calculation")
             pos_label = torch.ones_like(pos_score)
             neg_label = torch.zeros_like(neg_score)
             score = torch.cat([pos_score, neg_score])
             labels = torch.cat([pos_label, neg_label])
             loss = F.binary_cross_entropy_with_logits(score, labels)
+            nvtx.range_pop()
 
+        nvtx.range_push("Backward pass")
         scaler.scale(loss).backward()
+        nvtx.range_pop()
         scaler.step(opt)
         scaler.update()
         # loss.backward()
@@ -174,6 +185,7 @@ for epoch in range(10):
                 print(tt - t0)
                 durations.append(tt - t0)
                 break
+    nvtx.range_pop()
     if epoch % 10 == 0:
         model.eval()
         valid_mrr, test_mrr = evaluate(model, edge_split, device, 0 if args.pure_gpu else 12)

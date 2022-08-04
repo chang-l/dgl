@@ -8,6 +8,7 @@ import dgl.nn as dglnn
 import time
 import numpy as np
 import tqdm
+import torch.cuda.nvtx as nvtx
 # OGB must follow DGL if both DGL and PyG are installed. Otherwise DataLoader will hang.
 # (This is a long-standing issue)
 from ogb.linkproppred import DglLinkPropPredDataset
@@ -145,19 +146,29 @@ dataloader = dgl.dataloading.DataLoader(
         drop_last=False, num_workers=0, use_uva=not args.pure_gpu)
 
 durations = []
+torch.cuda.cudart().cudaProfilerStart()
 for epoch in range(10):
     model.train()
+    nvtx.range_push("Epoch" + str(epoch))
     t0 = time.time()
     for it, (input_nodes, pair_graph, neg_pair_graph, blocks) in enumerate(dataloader):
+        nvtx.range_push("Copy to device")
         x = blocks[0].srcdata['feat']
+        nvtx.range_pop()
+        nvtx.range_push("Forward pass")
         pos_score, neg_score = model(pair_graph, neg_pair_graph, blocks, x)
+        nvtx.range_pop()
+        nvtx.range_push("Loss calculation")
         pos_label = torch.ones_like(pos_score)
         neg_label = torch.zeros_like(neg_score)
         score = torch.cat([pos_score, neg_score])
         labels = torch.cat([pos_label, neg_label])
         loss = F.binary_cross_entropy_with_logits(score, labels)
+        nvtx.range_pop()
         opt.zero_grad()
+        nvtx.range_push("Backward pass")
         loss.backward()
+        nvtx.range_pop()
         opt.step()
         if (it + 1) % 20 == 0:
             mem = torch.cuda.max_memory_allocated() / 1000000
@@ -167,8 +178,12 @@ for epoch in range(10):
                 print(tt - t0)
                 durations.append(tt - t0)
                 break
+    nvtx.range_pop()
     if epoch % 10 == 0:
         model.eval()
         valid_mrr, test_mrr = evaluate(model, edge_split, device, 0 if args.pure_gpu else 12)
         print('Validation MRR:', valid_mrr.item(), 'Test MRR:', test_mrr.item())
+torch.cuda.cudart().cudaProfilerStop()
+
 print(np.mean(durations[4:]), np.std(durations[4:]))
+
