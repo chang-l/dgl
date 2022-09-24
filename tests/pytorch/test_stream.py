@@ -137,6 +137,10 @@ def test_record_stream_graph_negative():
     x = torch.ones(g.num_nodes(), 10)
     result = OPS.copy_u_sum(g, x).to(F.ctx())
 
+    gg = rand_graph(10, 20, device=F.cpu())
+    ## critical!!! Ensure the same memory allocation for gg and g
+    OPS.copy_u_sum(gg, x)
+
     stream = torch.cuda.Stream()
     results2 = torch.zeros_like(result)
     # Performs the computing in a background stream
@@ -153,7 +157,7 @@ def test_record_stream_graph_negative():
     perform_computing()
     with torch.cuda.stream(stream):
         # g3 will reuse g2's memory block, resulting a wrong result
-        g3 = rand_graph(10, 20, device=F.ctx())
+        g3 = gg.to(F.ctx())
     torch.cuda.current_stream().synchronize()
     assert not torch.equal(result, results2)
 
